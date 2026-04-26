@@ -1,0 +1,11 @@
+services:
+  routerunner:
+    build: .
+    container_name: routerunner
+    ports:
+      - "8765:8000"
+    volumes:
+      - ./cache:/app/cache
+    restart: unless-stopped
+    environment:
+      - TZ=Europe/Amsterdam

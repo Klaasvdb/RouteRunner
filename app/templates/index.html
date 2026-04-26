@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RouteRunner</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #111827;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    #sidebar {
+      width: 300px;
+      min-width: 300px;
+      background: #1f2937;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 18px 14px;
+      overflow-y: auto;
+      z-index: 1000;
+      box-shadow: 3px 0 12px rgba(0,0,0,.45);
+    }
+
+    .logo { color: #34d399; font-size: 1.45rem; font-weight: 800; letter-spacing: -.5px; }
+    .logo span { color: #60a5fa; }
+    .tagline { color: #6b7280; font-size: .78rem; line-height: 1.5; margin-top: 3px; }
+
+    /* ── Cards ── */
+    .card {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 13px 12px;
+    }
+    .card-title {
+      font-size: .68rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: #6b7280;
+      margin-bottom: 10px;
+    }
+
+    /* ── Coord display ── */
+    #coord-display {
+      background: #1f2937;
+      border: 1px solid #374151;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: monospace;
+      font-size: .82rem;
+      color: #60a5fa;
+    }
+    .hint { color: #6b7280; font-size: .75rem; line-height: 1.5; margin-top: 6px; }
+
+    /* ── Sliders ── */
+    .slider-row {
+      margin-bottom: 12px;
+    }
+    .slider-row:last-child { margin-bottom: 0; }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 4px;
+      font-size: .82rem;
+    }
+    .slider-val {
+      background: #1f2937;
+      border: 1px solid #374151;
+      padding: 1px 7px;
+      border-radius: 4px;
+      font-size: .75rem;
+      font-weight: 700;
+      color: #34d399;
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: #34d399;
+      cursor: pointer;
+      height: 4px;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      width: 100%;
+      padding: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: .92rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+    }
+    .btn-primary { background: #34d399; color: #0d1117; }
+    .btn-primary:hover { background: #10b981; transform: translateY(-1px); }
+    .btn-primary:disabled { background: #374151; color: #6b7280; cursor: not-allowed; transform: none; }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid #374151;
+      color: #9ca3af;
+      margin-top: 7px;
+    }
+    .btn-ghost:hover { background: #1f2937; border-color: #60a5fa; color: #60a5fa; }
+
+    /* ── Status ── */
+    .status {
+      padding: 9px 12px;
+      border-radius: 7px;
+      font-size: .82rem;
+      line-height: 1.4;
+      display: none;
+    }
+    .status.loading { background: #1e3a5f; color: #93c5fd; display: block; }
+    .status.error   { background: #3b1a1a; color: #fca5a5; display: block; }
+    .status.success { background: #14532d; color: #6ee7b7; display: block; }
+
+    /* ── Result stats ── */
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 5px 0;
+      border-bottom: 1px solid #1f2937;
+      font-size: .83rem;
+    }
+    .stat-row:last-child { border-bottom: none; }
+    .stat-val { color: #34d399; font-weight: 700; }
+
+    /* ── Map ── */
+    #map { flex: 1; }
+  </style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div>
+    <div class="logo">Route<span>Runner</span></div>
+    <div class="tagline">Find the perfect circular running route — optimised for trails, forests, and soft surfaces.</div>
+  </div>
+
+  <!-- Start location -->
+  <div class="card">
+    <div class="card-title">Start Location</div>
+    <div id="coord-display">Click on the map to set start</div>
+    <div class="hint">Click anywhere on the map to place your starting point.</div>
+  </div>
+
+  <!-- Distance -->
+  <div class="card">
+    <div class="card-title">Distance</div>
+    <div class="slider-row">
+      <div class="slider-header">
+        <span>Target distance</span>
+        <span class="slider-val" id="val-distance">10 km</span>
+      </div>
+      <input type="range" id="distance" min="1" max="50" value="10" step="0.5" />
+    </div>
+  </div>
+
+  <!-- Preferences -->
+  <div class="card">
+    <div class="card-title">Preferences</div>
+
+    <div class="slider-row">
+      <div class="slider-header">
+        <span>Soft surfaces</span>
+        <span class="slider-val" id="val-paved">50%</span>
+      </div>
+      <input type="range" id="avoid-paved" min="0" max="100" value="50" />
+      <div class="hint">Prefer dirt, grass, gravel over asphalt &amp; concrete.</div>
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-header">
+        <span>Forests &amp; nature trails</span>
+        <span class="slider-val" id="val-nature">50%</span>
+      </div>
+      <input type="range" id="prefer-nature" min="0" max="100" value="50" />
+      <div class="hint">Boost footpaths, tracks, and forest trails.</div>
+    </div>
+
+    <div class="slider-row">
+      <div class="slider-header">
+        <span>Avoid traffic</span>
+        <span class="slider-val" id="val-traffic">50%</span>
+      </div>
+      <input type="range" id="avoid-traffic" min="0" max="100" value="50" />
+      <div class="hint">Penalise busy primary &amp; secondary roads.</div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div>
+    <button class="btn btn-primary" id="find-btn" onclick="findRoute()" disabled>
+      Find Route
+    </button>
+    <button class="btn btn-ghost" onclick="clearRoute()">Clear</button>
+  </div>
+
+  <!-- Status -->
+  <div class="status" id="status"></div>
+
+  <!-- Results -->
+  <div class="card" id="result-card" style="display:none">
+    <div class="card-title">Route Info</div>
+    <div class="stat-row"><span>Actual distance</span><span class="stat-val" id="r-dist">–</span></div>
+    <div class="stat-row"><span>Target distance</span><span class="stat-val" id="r-target">–</span></div>
+  </div>
+</div>
+
+<div id="map"></div>
+
+<script>
+  const map = L.map('map').setView([52.25, 5.5], 9);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  let startMarker = null;
+  let routeLayer  = null;
+  let startLat = null, startLon = null;
+
+  const startIcon = L.divIcon({
+    html: '<div style="width:13px;height:13px;background:#34d399;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.55)"></div>',
+    iconSize: [13, 13], iconAnchor: [6, 6], className: '',
+  });
+
+  map.on('click', e => {
+    startLat = e.latlng.lat;
+    startLon = e.latlng.lng;
+
+    if (startMarker) map.removeLayer(startMarker);
+    startMarker = L.marker([startLat, startLon], { icon: startIcon })
+      .addTo(map).bindPopup('Start').openPopup();
+
+    document.getElementById('coord-display').textContent =
+      `${startLat.toFixed(5)},  ${startLon.toFixed(5)}`;
+    document.getElementById('find-btn').disabled = false;
+  });
+
+  // Slider labels
+  const sliders = [
+    ['distance',     'val-distance', v => `${v} km`],
+    ['avoid-paved',  'val-paved',    v => `${v}%`],
+    ['prefer-nature','val-nature',   v => `${v}%`],
+    ['avoid-traffic','val-traffic',  v => `${v}%`],
+  ];
+  sliders.forEach(([id, valId, fmt]) => {
+    const el = document.getElementById(id);
+    el.oninput = () => { document.getElementById(valId).textContent = fmt(el.value); };
+  });
+
+  function showStatus(type, msg) {
+    const el = document.getElementById('status');
+    el.className = `status ${type}`;
+    el.textContent = msg;
+  }
+
+  function clearRoute() {
+    if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+    document.getElementById('result-card').style.display = 'none';
+    document.getElementById('status').className = 'status';
+  }
+
+  async function findRoute() {
+    if (startLat === null) return;
+    clearRoute();
+    showStatus('loading', 'Fetching map data and calculating route…');
+    document.getElementById('find-btn').disabled = true;
+
+    const body = {
+      lat: startLat,
+      lon: startLon,
+      distance_km:   parseFloat(document.getElementById('distance').value),
+      avoid_paved:   parseFloat(document.getElementById('avoid-paved').value) / 100,
+      prefer_nature: parseFloat(document.getElementById('prefer-nature').value) / 100,
+      avoid_traffic: parseFloat(document.getElementById('avoid-traffic').value) / 100,
+    };
+
+    try {
+      const resp = await fetch('/api/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await resp.json();
+      if (!resp.ok) { showStatus('error', `Error: ${data.detail ?? 'Unknown error'}`); return; }
+
+      routeLayer = L.polyline(data.coordinates, {
+        color: '#34d399', weight: 4, opacity: 0.9,
+      }).addTo(map);
+      map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+
+      document.getElementById('r-dist').textContent   = `${data.actual_distance_km} km`;
+      document.getElementById('r-target').textContent = `${data.target_distance_km} km`;
+      document.getElementById('result-card').style.display = 'block';
+
+      showStatus('success', `Route found: ${data.actual_distance_km} km`);
+
+    } catch (err) {
+      showStatus('error', `Network error: ${err.message}`);
+    } finally {
+      document.getElementById('find-btn').disabled = false;
+    }
+  }
+</script>
+
+</body>
+</html>
