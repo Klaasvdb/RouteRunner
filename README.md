@@ -16,7 +16,7 @@ A self-hosted web app that calculates circular running routes optimised for soft
 ## Quick Start (Docker Compose)
 
 ```bash
-git clone https://github.com/your-username/RouteRunner.git
+git clone https://github.com/Klaasvdb/RouteRunner.git
 cd RouteRunner
 docker compose up -d --build
 ```
