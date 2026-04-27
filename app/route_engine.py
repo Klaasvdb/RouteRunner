@@ -1,5 +1,4 @@
 from typing import Optional
-
 import networkx as nx
 import numpy as np
 import osmnx as ox
@@ -36,11 +35,18 @@ _HARD_SURFACES = {
     "asphalt", "concrete", "paved", "cobblestone", "sett",
     "paving_stones", "metal",
 }
+
 _NATURE_HIGHWAYS = {"footway", "path", "track", "bridleway"}
 _TRAFFIC_HIGHWAYS = {
     "primary", "primary_link", "secondary", "secondary_link",
     "tertiary", "tertiary_link", "trunk", "trunk_link", "motorway", "motorway_link",
 }
+
+# Multiplier applied to edges already used in a previous segment of the
+# triangle (start->A, A->B, B->start). Forces subsequent shortest-path
+# searches to find genuinely different routes instead of overlapping the
+# same edges in reverse.
+_REUSE_PENALTY = 50.0
 
 
 def _edge_weight(data: dict, prefs: dict) -> float:
@@ -51,24 +57,37 @@ def _edge_weight(data: dict, prefs: dict) -> float:
     if isinstance(highway, list):
         highway = highway[0]
     highway = str(highway)
+    if isinstance(surface, list):
+        surface = surface[0]
 
     cost = _HIGHWAY_COST.get(highway, 5.0)
 
+    # --- Traffic avoidance ---
     avoid_traffic = prefs.get("avoid_traffic", 0.5)
     if highway in _TRAFFIC_HIGHWAYS:
         cost *= 1.0 + avoid_traffic * 4.0
 
+    # --- Surface preference ---
+    # When surface tag is missing on a nature highway, assume soft.
+    # (Statistically reliable: untagged footway/path/track is rarely asphalt.)
     avoid_paved = prefs.get("avoid_paved", 0.5)
-    if isinstance(surface, list):
-        surface = surface[0]
-    if surface in _SOFT_SURFACES:
+    effective_surface = surface
+    if effective_surface is None and highway in _NATURE_HIGHWAYS:
+        effective_surface = "ground"
+
+    if effective_surface in _SOFT_SURFACES:
         cost *= max(0.3, 1.0 - avoid_paved * 0.6)
-    elif surface in _HARD_SURFACES:
+    elif effective_surface in _HARD_SURFACES:
         cost *= 1.0 + avoid_paved * 1.0
 
+    # --- Nature preference ---
+    # Aggressive: at prefer_nature=1.0, nature paths get 20x discount,
+    # AND non-nature paths get 3x penalty. Combined effect ~60x preference.
     prefer_nature = prefs.get("prefer_nature", 0.5)
     if highway in _NATURE_HIGHWAYS:
-        cost *= max(0.2, 1.0 - prefer_nature * 0.7)
+        cost *= max(0.05, 1.0 - prefer_nature * 0.95)
+    else:
+        cost *= 1.0 + prefer_nature * 2.0
 
     return cost * length
 
@@ -76,14 +95,6 @@ def _edge_weight(data: dict, prefs: dict) -> float:
 def _apply_weights(G: nx.MultiDiGraph, prefs: dict) -> None:
     for u, v, k, data in G.edges(keys=True, data=True):
         G[u][v][k]["w"] = _edge_weight(data, prefs)
-
-
-def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    R = 6_371_000.0
-    p1, p2 = np.radians(lat1), np.radians(lat2)
-    dp, dl = np.radians(lat2 - lat1), np.radians(lon2 - lon1)
-    a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
-    return 2 * R * np.arcsin(np.sqrt(a))
 
 
 def _path_stats(G: nx.MultiDiGraph, path: list) -> tuple[float, float]:
@@ -95,6 +106,22 @@ def _path_stats(G: nx.MultiDiGraph, path: list) -> tuple[float, float]:
         total_len += min(d.get("length", 0) for d in edge.values())
         total_w   += min(d.get("w", 1e9)    for d in edge.values())
     return total_len, total_w
+
+
+def _penalize_path(G: nx.MultiDiGraph, path: list, factor: float = _REUSE_PENALTY) -> None:
+    """Multiply weights on edges used by `path` to discourage their reuse."""
+    for u, v in zip(path[:-1], path[1:]):
+        if G.has_edge(u, v):
+            for k in G[u][v]:
+                G[u][v][k]["w"] *= factor
+
+
+def _restore_path(G: nx.MultiDiGraph, path: list, factor: float = _REUSE_PENALTY) -> None:
+    """Undo `_penalize_path`."""
+    for u, v in zip(path[:-1], path[1:]):
+        if G.has_edge(u, v):
+            for k in G[u][v]:
+                G[u][v][k]["w"] /= factor
 
 
 def _node_at_bearing(
@@ -129,6 +156,36 @@ def _loop_penalty(coords: list) -> float:
     return (aspect - 1.0) / (aspect + 1.0)
 
 
+def _triangle_path(
+    G: nx.MultiDiGraph,
+    start: int,
+    node_a: int,
+    node_b: int,
+) -> Optional[list]:
+    """
+    Find a triangle start -> A -> B -> start, penalizing edges between
+    segments so that the three legs don't overlap. Restores the graph
+    afterwards regardless of success.
+    """
+    p1 = p2 = None
+    try:
+        p1 = nx.shortest_path(G, start, node_a, weight="w")
+        _penalize_path(G, p1)
+
+        p2 = nx.shortest_path(G, node_a, node_b, weight="w")
+        _penalize_path(G, p2)
+
+        p3 = nx.shortest_path(G, node_b, start, weight="w")
+        return p1 + p2[1:] + p3[1:]
+    except (nx.NetworkXNoPath, nx.NodeNotFound):
+        return None
+    finally:
+        if p1 is not None:
+            _restore_path(G, p1)
+        if p2 is not None:
+            _restore_path(G, p2)
+
+
 def find_route(
     lat: float,
     lon: float,
@@ -147,9 +204,6 @@ def find_route(
     seen_candidates: set[int] = set()
     candidate_coords: list = []
 
-    # Try three leg sizes to cover the range of path-vs-Euclidean detour ratios.
-    # Trails are rarely straight: actual path ≈ 1.2–2.0 × Euclidean distance.
-    # leg = D / (3 × detour_factor), so we bracket 1.2 → 2.0 with three values.
     # Three leg sizes bracket detour ratios of ~1.2, ~1.5, ~2.0.
     # Actual trail paths are rarely straight, so Euclidean leg < real path leg.
     leg_factors = (0.27, 0.22, 0.17)
@@ -160,7 +214,6 @@ def find_route(
             for spread in (+90, -90, +60, -60):
                 node_a = _node_at_bearing(G, s_lat, s_lon, base % 360, leg)
                 node_b = _node_at_bearing(G, s_lat, s_lon, (base + spread) % 360, leg)
-
                 if node_a is None or node_b is None:
                     continue
                 if len({start, node_a, node_b}) < 3:
@@ -171,12 +224,8 @@ def find_route(
                         seen_candidates.add(n)
                         candidate_coords.append([G.nodes[n]["y"], G.nodes[n]["x"]])
 
-                try:
-                    p1 = nx.shortest_path(G, start,  node_a, weight="w")
-                    p2 = nx.shortest_path(G, node_a, node_b, weight="w")
-                    p3 = nx.shortest_path(G, node_b, start,  weight="w")
-                    full = p1 + p2[1:] + p3[1:]
-                except (nx.NetworkXNoPath, nx.NodeNotFound):
+                full = _triangle_path(G, start, node_a, node_b)
+                if full is None:
                     continue
 
                 actual_len, total_w = _path_stats(G, full)
@@ -184,11 +233,9 @@ def find_route(
                     continue
 
                 coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in full]
-
                 deviation = abs(actual_len / target_distance_m - 1.0) * 3.0
                 avg_cost  = total_w / actual_len / 10.0
                 loop_pen  = _loop_penalty(coords) * 2.0
-
                 score = deviation + avg_cost + loop_pen
 
                 evaluated.append({
@@ -206,7 +253,6 @@ def find_route(
 
     # Sort worst → best so the animation reveals the winner last
     evaluated.sort(key=lambda x: x["score"], reverse=True)
-
     best_coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in best_path]
     best_len, _ = _path_stats(G, best_path)
 
