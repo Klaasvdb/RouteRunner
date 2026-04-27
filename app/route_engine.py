@@ -109,7 +109,6 @@ def _diverse_return(
     G: nx.MultiDiGraph, mid: int, start: int, outbound: list
 ) -> list:
     """Find return path that avoids heavily reusing outbound edges."""
-    # Temporarily multiply weight of outbound edges by 5
     touched: list[tuple[int, int, int, float]] = []
     for i in range(len(outbound) - 1):
         u, v = outbound[i], outbound[i + 1]
@@ -137,7 +136,7 @@ def find_route(
     target_distance_m: float,
     prefs: dict,
     G: nx.MultiDiGraph,
-) -> Optional[tuple[list[tuple[float, float]], float]]:
+) -> Optional[dict]:
     _apply_weights(G, prefs)
 
     start = ox.distance.nearest_nodes(G, lon, lat)
@@ -167,8 +166,13 @@ def find_route(
     if not candidates:
         return None
 
+    candidate_coords = [
+        [G.nodes[n]["y"], G.nodes[n]["x"]] for n in candidates
+    ]
+
     best_path: Optional[list] = None
     best_score = float("inf")
+    evaluated: list[dict] = []
 
     for mid in candidates:
         try:
@@ -183,10 +187,15 @@ def find_route(
             if actual_len == 0:
                 continue
 
-            # Score: penalise distance deviation + normalised avg cost per metre
             deviation = abs(actual_len / target_distance_m - 1.0) * 3.0
             avg_cost = total_w / actual_len / 10.0
             score = deviation + avg_cost
+
+            evaluated.append({
+                "coords": [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in full],
+                "score": round(score, 4),
+                "length_km": round(actual_len / 1000, 2),
+            })
 
             if score < best_score:
                 best_score = score
@@ -198,6 +207,15 @@ def find_route(
     if best_path is None:
         return None
 
-    coords = [(G.nodes[n]["y"], G.nodes[n]["x"]) for n in best_path]
-    actual_len, _ = _path_stats(G, best_path)
-    return coords, actual_len
+    # Sort worst→best so the animation reveals the winner last
+    evaluated.sort(key=lambda x: x["score"], reverse=True)
+
+    best_coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in best_path]
+    best_len, _ = _path_stats(G, best_path)
+
+    return {
+        "coords": best_coords,
+        "length": best_len,
+        "candidates": candidate_coords,
+        "evaluated": evaluated,
+    }

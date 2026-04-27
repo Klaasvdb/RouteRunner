@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>RouteRunner</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <style>
@@ -18,7 +19,6 @@
       overflow: hidden;
     }
 
-    /* ── Sidebar ── */
     #sidebar {
       width: 300px;
       min-width: 300px;
@@ -36,7 +36,6 @@
     .logo span { color: #60a5fa; }
     .tagline { color: #6b7280; font-size: .78rem; line-height: 1.5; margin-top: 3px; }
 
-    /* ── Cards ── */
     .card {
       background: #111827;
       border: 1px solid #374151;
@@ -52,7 +51,6 @@
       margin-bottom: 10px;
     }
 
-    /* ── Coord display ── */
     #coord-display {
       background: #1f2937;
       border: 1px solid #374151;
@@ -64,10 +62,7 @@
     }
     .hint { color: #6b7280; font-size: .75rem; line-height: 1.5; margin-top: 6px; }
 
-    /* ── Sliders ── */
-    .slider-row {
-      margin-bottom: 12px;
-    }
+    .slider-row { margin-bottom: 12px; }
     .slider-row:last-child { margin-bottom: 0; }
 
     .slider-header {
@@ -94,7 +89,6 @@
       height: 4px;
     }
 
-    /* ── Buttons ── */
     .btn {
       width: 100%;
       padding: 12px;
@@ -116,7 +110,6 @@
     }
     .btn-ghost:hover { background: #1f2937; border-color: #60a5fa; color: #60a5fa; }
 
-    /* ── Status ── */
     .status {
       padding: 9px 12px;
       border-radius: 7px;
@@ -128,7 +121,6 @@
     .status.error   { background: #3b1a1a; color: #fca5a5; display: block; }
     .status.success { background: #14532d; color: #6ee7b7; display: block; }
 
-    /* ── Result stats ── */
     .stat-row {
       display: flex;
       justify-content: space-between;
@@ -139,26 +131,26 @@
     .stat-row:last-child { border-bottom: none; }
     .stat-val { color: #34d399; font-weight: 700; }
 
-    /* ── Map ── */
     #map { flex: 1; }
   </style>
 </head>
 <body>
 
 <div id="sidebar">
-  <div>
-    <div class="logo">Route<span>Runner</span></div>
-    <div class="tagline">Find the perfect circular running route — optimised for trails, forests, and soft surfaces.</div>
+  <div style="display:flex;align-items:center;gap:10px">
+    <img src="/static/logo.svg" alt="RouteRunner" style="width:44px;height:44px;border-radius:10px;flex-shrink:0" />
+    <div>
+      <div class="logo">Route<span>Runner</span></div>
+      <div class="tagline">Circular running routes optimised for trails &amp; forests.</div>
+    </div>
   </div>
 
-  <!-- Start location -->
   <div class="card">
     <div class="card-title">Start Location</div>
     <div id="coord-display">Click on the map to set start</div>
     <div class="hint">Click anywhere on the map to place your starting point.</div>
   </div>
 
-  <!-- Distance -->
   <div class="card">
     <div class="card-title">Distance</div>
     <div class="slider-row">
@@ -170,7 +162,6 @@
     </div>
   </div>
 
-  <!-- Preferences -->
   <div class="card">
     <div class="card-title">Preferences</div>
 
@@ -202,22 +193,18 @@
     </div>
   </div>
 
-  <!-- Actions -->
   <div>
-    <button class="btn btn-primary" id="find-btn" onclick="findRoute()" disabled>
-      Find Route
-    </button>
+    <button class="btn btn-primary" id="find-btn" onclick="findRoute()" disabled>Find Route</button>
     <button class="btn btn-ghost" onclick="clearRoute()">Clear</button>
   </div>
 
-  <!-- Status -->
   <div class="status" id="status"></div>
 
-  <!-- Results -->
   <div class="card" id="result-card" style="display:none">
     <div class="card-title">Route Info</div>
     <div class="stat-row"><span>Actual distance</span><span class="stat-val" id="r-dist">–</span></div>
     <div class="stat-row"><span>Target distance</span><span class="stat-val" id="r-target">–</span></div>
+    <div class="stat-row"><span>Routes evaluated</span><span class="stat-val" id="r-evaluated">–</span></div>
   </div>
 </div>
 
@@ -232,6 +219,7 @@
 
   let startMarker = null;
   let routeLayer  = null;
+  let animLayers  = [];   // all temporary animation layers
   let startLat = null, startLon = null;
 
   const startIcon = L.divIcon({
@@ -242,24 +230,21 @@
   map.on('click', e => {
     startLat = e.latlng.lat;
     startLon = e.latlng.lng;
-
     if (startMarker) map.removeLayer(startMarker);
     startMarker = L.marker([startLat, startLon], { icon: startIcon })
       .addTo(map).bindPopup('Start').openPopup();
-
     document.getElementById('coord-display').textContent =
       `${startLat.toFixed(5)},  ${startLon.toFixed(5)}`;
     document.getElementById('find-btn').disabled = false;
   });
 
   // Slider labels
-  const sliders = [
-    ['distance',     'val-distance', v => `${v} km`],
-    ['avoid-paved',  'val-paved',    v => `${v}%`],
-    ['prefer-nature','val-nature',   v => `${v}%`],
-    ['avoid-traffic','val-traffic',  v => `${v}%`],
-  ];
-  sliders.forEach(([id, valId, fmt]) => {
+  [
+    ['distance',      'val-distance', v => `${v} km`],
+    ['avoid-paved',   'val-paved',    v => `${v}%`],
+    ['prefer-nature', 'val-nature',   v => `${v}%`],
+    ['avoid-traffic', 'val-traffic',  v => `${v}%`],
+  ].forEach(([id, valId, fmt]) => {
     const el = document.getElementById(id);
     el.oninput = () => { document.getElementById(valId).textContent = fmt(el.value); };
   });
@@ -270,10 +255,67 @@
     el.textContent = msg;
   }
 
+  function clearAnimLayers() {
+    animLayers.forEach(l => map.removeLayer(l));
+    animLayers = [];
+  }
+
   function clearRoute() {
     if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+    clearAnimLayers();
     document.getElementById('result-card').style.display = 'none';
     document.getElementById('status').className = 'status';
+  }
+
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  async function animateSearch(candidates, evaluated, bestCoords) {
+    // 1 — Scatter candidate midpoint dots
+    for (const [lat, lon] of candidates) {
+      const dot = L.circleMarker([lat, lon], {
+        radius: 5, color: '#60a5fa', fillColor: '#1d4ed8',
+        fillOpacity: 0.85, weight: 2,
+      }).addTo(map);
+      animLayers.push(dot);
+      await sleep(35);
+    }
+
+    await sleep(150);
+
+    // 2 — Flash each evaluated loop (worst first, best last stays visible)
+    for (let i = 0; i < evaluated.length; i++) {
+      const e = evaluated[i];
+      const isBest = i === evaluated.length - 1;
+
+      // Colour transitions from red (bad) → yellow → green (best)
+      const t = i / Math.max(evaluated.length - 1, 1);
+      const color = isBest
+        ? '#34d399'
+        : t < 0.5
+          ? `hsl(${Math.round(t * 2 * 40)}deg,90%,55%)`   // red → orange
+          : `hsl(${Math.round(40 + (t - 0.5) * 2 * 60)}deg,90%,55%)`; // orange → yellow
+
+      const line = L.polyline(e.coords, {
+        color, weight: isBest ? 4 : 2, opacity: isBest ? 0.9 : 0.55,
+      }).addTo(map);
+      animLayers.push(line);
+
+      if (!isBest) {
+        await sleep(120);
+        map.removeLayer(line);
+        animLayers.pop();
+      }
+    }
+
+    await sleep(300);
+
+    // 3 — Remove dots and flash-layers, draw the final winning route
+    clearAnimLayers();
+
+    routeLayer = L.polyline(bestCoords, {
+      color: '#34d399', weight: 5, opacity: 0.95,
+    }).addTo(map);
+    map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
   }
 
   async function findRoute() {
@@ -301,13 +343,13 @@
       const data = await resp.json();
       if (!resp.ok) { showStatus('error', `Error: ${data.detail ?? 'Unknown error'}`); return; }
 
-      routeLayer = L.polyline(data.coordinates, {
-        color: '#34d399', weight: 4, opacity: 0.9,
-      }).addTo(map);
-      map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+      showStatus('loading', `Animating ${data.evaluated.length} evaluated routes…`);
 
-      document.getElementById('r-dist').textContent   = `${data.actual_distance_km} km`;
-      document.getElementById('r-target').textContent = `${data.target_distance_km} km`;
+      await animateSearch(data.candidates, data.evaluated, data.coordinates);
+
+      document.getElementById('r-dist').textContent      = `${data.actual_distance_km} km`;
+      document.getElementById('r-target').textContent    = `${data.target_distance_km} km`;
+      document.getElementById('r-evaluated').textContent = data.evaluated.length;
       document.getElementById('result-card').style.display = 'block';
 
       showStatus('success', `Route found: ${data.actual_distance_km} km`);

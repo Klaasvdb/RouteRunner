@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -8,7 +9,16 @@ from cache_manager import get_or_fetch_graph
 from route_engine import find_route
 
 app = FastAPI(title="RouteRunner")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+
+@app.exception_handler(Exception)
+async def _unhandled(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": f"{type(exc).__name__}: {exc}"},
+    )
 
 
 class RouteRequest(BaseModel):
@@ -28,7 +38,6 @@ async def index(request: Request):
 @app.post("/api/route")
 async def calculate_route(req: RouteRequest):
     target_m = req.distance_km * 1000
-    # Fetch radius: slightly larger than half the route so midpoints are reachable
     radius = min(target_m * 0.65, 10_000)
 
     try:
@@ -42,7 +51,10 @@ async def calculate_route(req: RouteRequest):
         "avoid_traffic": req.avoid_traffic,
     }
 
-    result = await run_in_threadpool(find_route, req.lat, req.lon, target_m, prefs, G)
+    try:
+        result = await run_in_threadpool(find_route, req.lat, req.lon, target_m, prefs, G)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Route calculation failed: {exc}")
 
     if result is None:
         raise HTTPException(
@@ -50,11 +62,12 @@ async def calculate_route(req: RouteRequest):
             detail="No circular route found. Try a shorter distance or different location.",
         )
 
-    coords, actual_m = result
     return {
-        "coordinates": coords,
-        "actual_distance_km": round(actual_m / 1000, 2),
+        "coordinates": result["coords"],
+        "actual_distance_km": round(result["length"] / 1000, 2),
         "target_distance_km": req.distance_km,
+        "candidates": result["candidates"],
+        "evaluated": result["evaluated"],
     }
 
 
