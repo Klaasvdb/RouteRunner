@@ -141,62 +141,65 @@ def find_route(
     s_lat = G.nodes[start]["y"]
     s_lon = G.nodes[start]["x"]
 
-    # Each waypoint leg ≈ ⅓ of target distance (+ small buffer for real-path detours)
-    leg = target_distance_m * 0.38
-
     best_path: Optional[list] = None
     best_score = float("inf")
     evaluated: list[dict] = []
     seen_candidates: set[int] = set()
     candidate_coords: list = []
 
-    # 8 compass directions × 4 spreads between waypoint A and B
-    # This tries loops shaped like wide triangles, right-angle triangles, etc.
-    for base in range(0, 360, 45):
-        for spread in (+90, -90, +60, -60):
-            node_a = _node_at_bearing(G, s_lat, s_lon, base % 360, leg)
-            node_b = _node_at_bearing(G, s_lat, s_lon, (base + spread) % 360, leg)
+    # Try three leg sizes to cover the range of path-vs-Euclidean detour ratios.
+    # Trails are rarely straight: actual path ≈ 1.2–2.0 × Euclidean distance.
+    # leg = D / (3 × detour_factor), so we bracket 1.2 → 2.0 with three values.
+    # Three leg sizes bracket detour ratios of ~1.2, ~1.5, ~2.0.
+    # Actual trail paths are rarely straight, so Euclidean leg < real path leg.
+    leg_factors = (0.27, 0.22, 0.17)
 
-            if node_a is None or node_b is None:
-                continue
-            if len({start, node_a, node_b}) < 3:   # collapsed triangle — skip
-                continue
+    for leg_factor in leg_factors:
+        leg = target_distance_m * leg_factor
+        for base in range(0, 360, 45):
+            for spread in (+90, -90, +60, -60):
+                node_a = _node_at_bearing(G, s_lat, s_lon, base % 360, leg)
+                node_b = _node_at_bearing(G, s_lat, s_lon, (base + spread) % 360, leg)
 
-            for n in (node_a, node_b):
-                if n not in seen_candidates:
-                    seen_candidates.add(n)
-                    candidate_coords.append([G.nodes[n]["y"], G.nodes[n]["x"]])
+                if node_a is None or node_b is None:
+                    continue
+                if len({start, node_a, node_b}) < 3:
+                    continue
 
-            try:
-                # Three-leg loop: start → A → B → start
-                p1 = nx.shortest_path(G, start,  node_a, weight="w")
-                p2 = nx.shortest_path(G, node_a, node_b, weight="w")
-                p3 = nx.shortest_path(G, node_b, start,  weight="w")
-                full = p1 + p2[1:] + p3[1:]
-            except (nx.NetworkXNoPath, nx.NodeNotFound):
-                continue
+                for n in (node_a, node_b):
+                    if n not in seen_candidates:
+                        seen_candidates.add(n)
+                        candidate_coords.append([G.nodes[n]["y"], G.nodes[n]["x"]])
 
-            actual_len, total_w = _path_stats(G, full)
-            if actual_len == 0:
-                continue
+                try:
+                    p1 = nx.shortest_path(G, start,  node_a, weight="w")
+                    p2 = nx.shortest_path(G, node_a, node_b, weight="w")
+                    p3 = nx.shortest_path(G, node_b, start,  weight="w")
+                    full = p1 + p2[1:] + p3[1:]
+                except (nx.NetworkXNoPath, nx.NodeNotFound):
+                    continue
 
-            coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in full]
+                actual_len, total_w = _path_stats(G, full)
+                if actual_len == 0:
+                    continue
 
-            deviation = abs(actual_len / target_distance_m - 1.0) * 3.0
-            avg_cost  = total_w / actual_len / 10.0
-            loop_pen  = _loop_penalty(coords) * 2.0   # strong penalty for elongated routes
+                coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in full]
 
-            score = deviation + avg_cost + loop_pen
+                deviation = abs(actual_len / target_distance_m - 1.0) * 3.0
+                avg_cost  = total_w / actual_len / 10.0
+                loop_pen  = _loop_penalty(coords) * 2.0
 
-            evaluated.append({
-                "coords": coords,
-                "score": round(score, 4),
-                "length_km": round(actual_len / 1000, 2),
-            })
+                score = deviation + avg_cost + loop_pen
 
-            if score < best_score:
-                best_score = score
-                best_path = full
+                evaluated.append({
+                    "coords": coords,
+                    "score": round(score, 4),
+                    "length_km": round(actual_len / 1000, 2),
+                })
+
+                if score < best_score:
+                    best_score = score
+                    best_path = full
 
     if best_path is None:
         return None

@@ -211,7 +211,11 @@
 <div id="map"></div>
 
 <script>
-  const map = L.map('map').setView([52.25, 5.5], 9);
+  const _saved = JSON.parse(localStorage.getItem('rr_start') || 'null');
+  const _initView = _saved ? [_saved.lat, _saved.lon] : [52.25, 5.5];
+  const _initZoom = _saved ? 13 : 9;
+
+  const map = L.map('map').setView(_initView, _initZoom);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19,
@@ -219,7 +223,7 @@
 
   let startMarker = null;
   let routeLayer  = null;
-  let animLayers  = [];   // all temporary animation layers
+  let animLayers  = [];
   let startLat = null, startLon = null;
 
   const startIcon = L.divIcon({
@@ -227,16 +231,22 @@
     iconSize: [13, 13], iconAnchor: [6, 6], className: '',
   });
 
-  map.on('click', e => {
-    startLat = e.latlng.lat;
-    startLon = e.latlng.lng;
+  function setStart(lat, lon) {
+    startLat = lat;
+    startLon = lon;
     if (startMarker) map.removeLayer(startMarker);
-    startMarker = L.marker([startLat, startLon], { icon: startIcon })
+    startMarker = L.marker([lat, lon], { icon: startIcon })
       .addTo(map).bindPopup('Start').openPopup();
     document.getElementById('coord-display').textContent =
-      `${startLat.toFixed(5)},  ${startLon.toFixed(5)}`;
+      `${lat.toFixed(5)},  ${lon.toFixed(5)}`;
     document.getElementById('find-btn').disabled = false;
-  });
+    localStorage.setItem('rr_start', JSON.stringify({ lat, lon }));
+  }
+
+  // Restore saved start point
+  if (_saved) setStart(_saved.lat, _saved.lon);
+
+  map.on('click', e => setStart(e.latlng.lat, e.latlng.lng));
 
   // Slider labels
   [
