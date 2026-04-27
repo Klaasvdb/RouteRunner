@@ -1,11 +1,9 @@
-import random
 from typing import Optional
 
 import networkx as nx
 import numpy as np
 import osmnx as ox
 
-# Lower multiplier = more desirable for running
 _HIGHWAY_COST: dict[str, float] = {
     "footway": 1.0,
     "path": 1.0,
@@ -38,7 +36,6 @@ _HARD_SURFACES = {
     "asphalt", "concrete", "paved", "cobblestone", "sett",
     "paving_stones", "metal",
 }
-
 _NATURE_HIGHWAYS = {"footway", "path", "track", "bridleway"}
 _TRAFFIC_HIGHWAYS = {
     "primary", "primary_link", "secondary", "secondary_link",
@@ -84,50 +81,52 @@ def _apply_weights(G: nx.MultiDiGraph, prefs: dict) -> None:
 def _haversine(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 6_371_000.0
     p1, p2 = np.radians(lat1), np.radians(lat2)
-    dp = np.radians(lat2 - lat1)
-    dl = np.radians(lon2 - lon1)
+    dp, dl = np.radians(lat2 - lat1), np.radians(lon2 - lon1)
     a = np.sin(dp / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(dl / 2) ** 2
     return 2 * R * np.arcsin(np.sqrt(a))
 
 
 def _path_stats(G: nx.MultiDiGraph, path: list) -> tuple[float, float]:
-    """Return (total_length_m, total_weight)."""
-    total_len = 0.0
-    total_w = 0.0
+    total_len = total_w = 0.0
     for i in range(len(path) - 1):
         edge = G.get_edge_data(path[i], path[i + 1])
         if not edge:
             continue
-        lengths = [d.get("length", 0) for d in edge.values()]
-        weights = [d.get("w", 1e9) for d in edge.values()]
-        total_len += min(lengths)
-        total_w += min(weights)
+        total_len += min(d.get("length", 0) for d in edge.values())
+        total_w   += min(d.get("w", 1e9)    for d in edge.values())
     return total_len, total_w
 
 
-def _diverse_return(
-    G: nx.MultiDiGraph, mid: int, start: int, outbound: list
-) -> list:
-    """Find return path that avoids heavily reusing outbound edges."""
-    touched: list[tuple[int, int, int, float]] = []
-    for i in range(len(outbound) - 1):
-        u, v = outbound[i], outbound[i + 1]
-        if not G.has_edge(u, v):
-            continue
-        for k in G[u][v]:
-            orig = G[u][v][k].get("w", 1.0)
-            G[u][v][k]["w"] = orig * 5.0
-            touched.append((u, v, k, orig))
-
+def _node_at_bearing(
+    G: nx.MultiDiGraph,
+    s_lat: float, s_lon: float,
+    bearing_deg: float, distance_m: float,
+) -> Optional[int]:
+    """Nearest graph node to the point at `distance_m` in compass direction `bearing_deg`."""
+    R = 6_371_000.0
+    b = np.radians(bearing_deg)
+    t_lat = s_lat + np.degrees(distance_m / R * np.cos(b))
+    t_lon = s_lon + np.degrees(distance_m / R * np.sin(b) / np.cos(np.radians(s_lat)))
     try:
-        path = nx.shortest_path(G, mid, start, weight="w")
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
-        path = []
-    finally:
-        for u, v, k, orig in touched:
-            G[u][v][k]["w"] = orig
+        return ox.distance.nearest_nodes(G, t_lon, t_lat)
+    except Exception:
+        return None
 
-    return path
+
+def _loop_penalty(coords: list) -> float:
+    """
+    Bounding-box aspect-ratio penalty.
+    0 = square bounding box (proper loop).
+    1 = infinitely elongated (straight out-and-back).
+    """
+    lats = [c[0] for c in coords]
+    lons = [c[1] for c in coords]
+    lat_r = max(lats) - min(lats)
+    lon_r = max(lons) - min(lons)
+    if lat_r == 0 or lon_r == 0:
+        return 1.0
+    aspect = max(lat_r, lon_r) / min(lat_r, lon_r)
+    return (aspect - 1.0) / (aspect + 1.0)
 
 
 def find_route(
@@ -138,61 +137,59 @@ def find_route(
     G: nx.MultiDiGraph,
 ) -> Optional[dict]:
     _apply_weights(G, prefs)
-
     start = ox.distance.nearest_nodes(G, lon, lat)
     s_lat = G.nodes[start]["y"]
     s_lon = G.nodes[start]["x"]
 
-    half = target_distance_m / 2.0
-
-    # Bucket candidates into 8 directional sectors for route diversity
-    n_sectors = 8
-    sectors: list[list[int]] = [[] for _ in range(n_sectors)]
-
-    for node, d in G.nodes(data=True):
-        if node == start:
-            continue
-        dist = _haversine(s_lat, s_lon, d["y"], d["x"])
-        if half * 0.25 < dist < half * 1.3:
-            bearing = np.degrees(np.arctan2(d["x"] - s_lon, d["y"] - s_lat)) % 360
-            sector = int(bearing / (360 / n_sectors)) % n_sectors
-            sectors[sector].append(node)
-
-    candidates: list[int] = []
-    for sector in sectors:
-        if sector:
-            candidates.extend(random.sample(sector, min(6, len(sector))))
-
-    if not candidates:
-        return None
-
-    candidate_coords = [
-        [G.nodes[n]["y"], G.nodes[n]["x"]] for n in candidates
-    ]
+    # Each waypoint leg ≈ ⅓ of target distance (+ small buffer for real-path detours)
+    leg = target_distance_m * 0.38
 
     best_path: Optional[list] = None
     best_score = float("inf")
     evaluated: list[dict] = []
+    seen_candidates: set[int] = set()
+    candidate_coords: list = []
 
-    for mid in candidates:
-        try:
-            path_out = nx.shortest_path(G, start, mid, weight="w")
-            path_back = _diverse_return(G, mid, start, path_out)
-            if not path_back:
+    # 8 compass directions × 4 spreads between waypoint A and B
+    # This tries loops shaped like wide triangles, right-angle triangles, etc.
+    for base in range(0, 360, 45):
+        for spread in (+90, -90, +60, -60):
+            node_a = _node_at_bearing(G, s_lat, s_lon, base % 360, leg)
+            node_b = _node_at_bearing(G, s_lat, s_lon, (base + spread) % 360, leg)
+
+            if node_a is None or node_b is None:
+                continue
+            if len({start, node_a, node_b}) < 3:   # collapsed triangle — skip
                 continue
 
-            full = path_out + path_back[1:]
-            actual_len, total_w = _path_stats(G, full)
+            for n in (node_a, node_b):
+                if n not in seen_candidates:
+                    seen_candidates.add(n)
+                    candidate_coords.append([G.nodes[n]["y"], G.nodes[n]["x"]])
 
+            try:
+                # Three-leg loop: start → A → B → start
+                p1 = nx.shortest_path(G, start,  node_a, weight="w")
+                p2 = nx.shortest_path(G, node_a, node_b, weight="w")
+                p3 = nx.shortest_path(G, node_b, start,  weight="w")
+                full = p1 + p2[1:] + p3[1:]
+            except (nx.NetworkXNoPath, nx.NodeNotFound):
+                continue
+
+            actual_len, total_w = _path_stats(G, full)
             if actual_len == 0:
                 continue
 
+            coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in full]
+
             deviation = abs(actual_len / target_distance_m - 1.0) * 3.0
-            avg_cost = total_w / actual_len / 10.0
-            score = deviation + avg_cost
+            avg_cost  = total_w / actual_len / 10.0
+            loop_pen  = _loop_penalty(coords) * 2.0   # strong penalty for elongated routes
+
+            score = deviation + avg_cost + loop_pen
 
             evaluated.append({
-                "coords": [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in full],
+                "coords": coords,
                 "score": round(score, 4),
                 "length_km": round(actual_len / 1000, 2),
             })
@@ -201,13 +198,10 @@ def find_route(
                 best_score = score
                 best_path = full
 
-        except (nx.NetworkXNoPath, nx.NodeNotFound):
-            continue
-
     if best_path is None:
         return None
 
-    # Sort worst→best so the animation reveals the winner last
+    # Sort worst → best so the animation reveals the winner last
     evaluated.sort(key=lambda x: x["score"], reverse=True)
 
     best_coords = [[G.nodes[n]["y"], G.nodes[n]["x"]] for n in best_path]
