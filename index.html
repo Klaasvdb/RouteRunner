@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Arrow Removal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #111122;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100dvh;
+    font-family: sans-serif;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    cursor: pointer;
+    max-width: 100vw;
+    max-height: 100dvh;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ─── Level definition ────────────────────────────────────────────────────────
+// '#' wall  '>' right  '<' left  '^' up  'v' down  ' ' empty corridor
+const LAYOUT = [
+  "##################################################",
+  "#                                                #",
+  "#   <      <      <      <      >      >      >  #",
+  "#                                                #",
+  "# ^                                           v  #",
+  "#                                                #",
+  "# ^                                           v  #",
+  "#                                                #",
+  "# ^                                           v  #",
+  "#                                                #",
+  "#   <      <      <      <      >      >      >  #",
+  "#                                                #",
+  "##################################################",
+];
+
+const ROWS = LAYOUT.length;
+const COLS = LAYOUT[0].length;
+
+// Build grid
+const grid = [];
+for (let r = 0; r < ROWS; r++) {
+  grid[r] = [];
+  for (let c = 0; c < COLS; c++) {
+    const ch = LAYOUT[r][c] ?? '#';
+    grid[r][c] = {
+      wall: ch === '#',
+      arrow: ch === '>' ? 'R' : ch === '<' ? 'L' : ch === '^' ? 'U' : ch === 'v' ? 'D' : null,
+      removed: false,
+    };
+  }
+}
+
+// ─── Game logic ───────────────────────────────────────────────────────────────
+function delta(dir) {
+  return { R:[0,1], L:[0,-1], U:[-1,0], D:[1,0] }[dir];
+}
+
+function pathAhead(r, c) {
+  const dir = grid[r][c].arrow;
+  if (!dir) return [];
+  const [dr, dc] = delta(dir);
+  const path = [];
+  let nr = r + dr, nc = c + dc;
+  while (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
+    path.push([nr, nc]);
+    nr += dr; nc += dc;
+  }
+  return path;
+}
+
+function canRemove(r, c) {
+  const cell = grid[r][c];
+  if (cell.wall || !cell.arrow || cell.removed) return false;
+  return pathAhead(r, c).every(([nr, nc]) => {
+    const a = grid[nr][nc];
+    return a.wall || !a.arrow || a.removed;
+  });
+}
+
+function isComplete() {
+  return grid.every(row => row.every(cell => cell.wall || !cell.arrow || cell.removed));
+}
+
+function resetGrid() {
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      grid[r][c].removed = false;
+  won = false;
+  anim = null;
+  invalidFlash = null;
+}
+
+// ─── Canvas setup ─────────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+function resize() {
+  const aspect = COLS / ROWS;
+  let w = window.innerWidth;
+  let h = window.innerHeight;
+  if (w / h > aspect) w = h * aspect;
+  else h = w / aspect;
+  canvas.width  = Math.floor(w);
+  canvas.height = Math.floor(h);
+  draw();
+}
+window.addEventListener('resize', resize);
+
+// ─── Animation state ─────────────────────────────────────────────────────────
+let anim = null;       // { path:[[r,c],...], dir, progress:0..1 }
+let invalidFlash = null; // { r, c, until }
+let won = false;
+let lastTime = null;
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+const BG        = '#1a1a2e';
+const CORRIDOR  = '#252545';
+const ARROW_COL = '#a0a0d0';
+const DOT_COL   = '#3a3a5e';
+const INVALID   = '#ff4444';
+const SLITHER   = '#5080ff';
+const WIN_GREEN = '#44ff88';
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  const cw = W / COLS, ch = H / ROWS;
+
+  ctx.fillStyle = BG;
+  ctx.fillRect(0, 0, W, H);
+
+  // Corridors
+  ctx.fillStyle = CORRIDOR;
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (!grid[r][c].wall) {
+        ctx.fillRect(c * cw, r * ch, cw, ch);
+        if (c + 1 < COLS && !grid[r][c+1].wall)
+          ctx.fillRect(c * cw + cw * 0.5, r * ch, cw, ch);
+        if (r + 1 < ROWS && !grid[r+1][c].wall)
+          ctx.fillRect(c * cw, r * ch + ch * 0.5, cw, ch);
+      }
+    }
+  }
+
+  const sw = Math.min(cw, ch) * 0.12;
+
+  // Arrows & dots
+  const now = Date.now();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const cell = grid[r][c];
+      if (cell.wall) continue;
+      const cx = c * cw + cw / 2, cy = r * ch + ch / 2;
+      const isAnimOrigin = anim && anim.path[0][0] === r && anim.path[0][1] === c;
+
+      if (cell.removed && !isAnimOrigin) {
+        ctx.fillStyle = DOT_COL;
+        ctx.beginPath();
+        ctx.arc(cx, cy, cw * 0.08, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (cell.arrow && !cell.removed) {
+        const isInvalid = invalidFlash && invalidFlash.r === r && invalidFlash.c === c && now < invalidFlash.until;
+        drawArrow(cx, cy, cell.arrow, cw, ch, sw, isInvalid ? INVALID : ARROW_COL);
+      }
+    }
+  }
+
+  // Slither animation
+  if (anim) {
+    const { path, dir, progress } = anim;
+    const total = path.length;
+    const cellProg = progress * total;
+    const headIdx = Math.min(Math.floor(cellProg), total - 1);
+    const frac = cellProg - headIdx;
+
+    for (let i = 0; i <= headIdx; i++) {
+      const [pr, pc] = path[i];
+      const alpha = Math.round((1 - i / total) * 180);
+      ctx.fillStyle = `rgba(80,128,255,${(alpha/255).toFixed(2)})`;
+      ctx.fillRect(pc * cw, pr * ch, cw, ch);
+    }
+
+    const [hr, hc] = path[headIdx];
+    let hx = hc * cw + cw / 2, hy = hr * ch + ch / 2;
+    if (headIdx + 1 < path.length) {
+      const [nr, nc] = path[headIdx + 1];
+      const nx = nc * cw + cw / 2, ny = nr * ch + ch / 2;
+      hx += (nx - hx) * frac;
+      hy += (ny - hy) * frac;
+    }
+    drawArrow(hx, hy, dir, cw, ch, sw, SLITHER);
+  }
+
+  // Win overlay
+  if (won) {
+    ctx.fillStyle = 'rgba(26,26,46,0.85)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = WIN_GREEN;
+    ctx.font = `bold ${W * 0.07}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.fillText('All Cleared!', W / 2, H * 0.44);
+    ctx.fillStyle = '#a0a0d0';
+    ctx.font = `${W * 0.035}px sans-serif`;
+    ctx.fillText('Tap anywhere to play again', W / 2, H * 0.54);
+  }
+}
+
+function drawArrow(cx, cy, dir, cw, ch, sw, color) {
+  const len = Math.min(cw, ch) * 0.55;
+  const head = Math.min(cw, ch) * 0.22;
+  const angle = { R: 0, D: Math.PI/2, L: Math.PI, U: -Math.PI/2 }[dir];
+
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.rotate(angle);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = sw;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  ctx.beginPath();
+  ctx.moveTo(-len/2, 0);
+  ctx.lineTo(len/2, 0);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(len/2, 0);
+  ctx.lineTo(len/2 - head, -head * 0.7);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(len/2, 0);
+  ctx.lineTo(len/2 - head, head * 0.7);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// ─── Animation loop ───────────────────────────────────────────────────────────
+const ANIM_DURATION = 500; // ms
+
+function loop(ts) {
+  requestAnimationFrame(loop);
+  if (!anim) { draw(); return; }
+
+  if (!lastTime) lastTime = ts;
+  const dt = ts - lastTime;
+  lastTime = ts;
+
+  anim.progress = Math.min(1, anim.progress + dt / ANIM_DURATION);
+  draw();
+
+  if (anim.progress >= 1) {
+    anim = null;
+    lastTime = null;
+    won = isComplete();
+    draw();
+  }
+}
+requestAnimationFrame(loop);
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+function onTap(px, py) {
+  if (won) { resetGrid(); draw(); return; }
+  if (anim) return;
+
+  const cw = canvas.width / COLS, ch = canvas.height / ROWS;
+  const c = Math.floor(px / cw), r = Math.floor(py / ch);
+  if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return;
+
+  const cell = grid[r][c];
+  if (cell.wall || !cell.arrow || cell.removed) return;
+
+  if (!canRemove(r, c)) {
+    invalidFlash = { r, c, until: Date.now() + 400 };
+    return;
+  }
+
+  const path = [[r, c], ...pathAhead(r, c)];
+  const dir = cell.arrow;
+  cell.removed = true;
+  anim = { path, dir, progress: 0 };
+  lastTime = null;
+}
+
+canvas.addEventListener('click', e => {
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+  onTap((e.clientX - rect.left) * sx, (e.clientY - rect.top) * sy);
+});
+
+canvas.addEventListener('touchend', e => {
+  e.preventDefault();
+  const t = e.changedTouches[0];
+  const rect = canvas.getBoundingClientRect();
+  const sx = canvas.width / rect.width, sy = canvas.height / rect.height;
+  onTap((t.clientX - rect.left) * sx, (t.clientY - rect.top) * sy);
+}, { passive: false });
+
+resize();
+</script>
+</body>
+</html>
