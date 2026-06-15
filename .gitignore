@@ -1,17 +1,10 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-.venv/
-venv/
-dist/
-build/
-
-# OSM graph cache (can be large)
-cache/
-
-# Docker
-.dockerignore
-
-# OS
+*.iml
+.gradle
+/local.properties
+/.idea
 .DS_Store
-Thumbs.db
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
