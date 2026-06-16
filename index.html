@@ -2,328 +2,510 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Arrow Removal</title>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body {
-    background: #0d0d1a;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100dvh;
-    overflow: hidden;
-    touch-action: none;
-  }
-  #hud {
-    color: #7070aa;
-    font: 600 13px/1 sans-serif;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-    display: flex;
-    gap: 20px;
-  }
-  #hud span { color: #a0a0cc; }
-  canvas { display: block; border-radius: 6px; }
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0d0d1a;--surface:#141430;--surface2:#1a1a38;
+  --accent:#5566ff;--text:#c0c0e0;--muted:#555580;
+  --arrow:#8888cc;--dot:#1c1c3a;--invalid:#cc3344;
+  --slither:#3b60ff;--win:#44ffaa;
+}
+html,body{width:100%;height:100%;background:var(--bg);color:var(--text);
+  font-family:system-ui,sans-serif;overflow:hidden;touch-action:none}
+
+/* ── Menu ── */
+#menu{width:100%;height:100%;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:24px;gap:24px;overflow-y:auto}
+h1{font-size:1.9rem;font-weight:700;letter-spacing:.06em;color:#aaaaee}
+.sec-label{font-size:.68rem;font-weight:700;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+.presets{width:100%;max-width:340px}
+.preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.preset-btn{background:var(--surface2);border:1.5px solid transparent;
+  border-radius:10px;color:var(--text);padding:12px 8px;cursor:pointer;
+  text-align:center;transition:border-color .15s,background .15s}
+.preset-btn .name{font-size:.9rem;font-weight:600}
+.preset-btn .info{font-size:.7rem;color:var(--muted);margin-top:3px}
+.preset-btn.active{border-color:var(--accent);background:#1e2048}
+.preset-btn:hover{background:#1a1a42}
+.custom{width:100%;max-width:340px}
+.slider-row{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.slider-row label{width:130px;font-size:.8rem;color:var(--muted);flex-shrink:0}
+.slider-row input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
+.slider-row .val{width:28px;text-align:right;font-size:.8rem;font-weight:600}
+#play-btn{width:100%;max-width:340px;background:var(--accent);color:#fff;
+  border:none;border-radius:12px;padding:15px;font-size:1rem;font-weight:700;
+  letter-spacing:.05em;cursor:pointer;transition:opacity .15s}
+#play-btn:hover{opacity:.85}
+
+/* ── Game ── */
+#game{width:100%;height:100%;display:none;flex-direction:column;
+  align-items:center;justify-content:center;padding:8px;gap:7px}
+#hud{width:100%;max-width:640px;display:flex;
+  align-items:center;justify-content:space-between;gap:8px}
+.hud-btn{background:var(--surface2);border:none;border-radius:8px;
+  color:var(--text);padding:8px 12px;font-size:.82rem;cursor:pointer}
+.hud-btn:hover{background:#1a1a42}
+#counter{font-size:.8rem;color:var(--muted)}
+#counter span{color:var(--text);font-weight:600}
+canvas{display:block;border-radius:6px;cursor:pointer}
+#gen-overlay{position:fixed;inset:0;background:rgba(13,13,26,.85);
+  display:none;align-items:center;justify-content:center;
+  font-size:1rem;color:var(--muted);z-index:9}
 </style>
 </head>
 <body>
-<div id="hud">
-  Remaining: <span id="left">0</span>
+
+<div id="menu">
+  <h1>Arrow Removal</h1>
+  <div class="presets">
+    <div class="sec-label">Presets</div>
+    <div class="preset-grid" id="preset-grid"></div>
+  </div>
+  <div class="custom">
+    <div class="sec-label">Custom</div>
+    <div class="slider-row">
+      <label>Columns</label>
+      <input type="range" id="sl-cols" min="4" max="20" value="9">
+      <span class="val" id="vl-cols">9</span>
+    </div>
+    <div class="slider-row">
+      <label>Rows</label>
+      <input type="range" id="sl-rows" min="6" max="32" value="14">
+      <span class="val" id="vl-rows">14</span>
+    </div>
+    <div class="slider-row">
+      <label>Max arrow length</label>
+      <input type="range" id="sl-len" min="1" max="8" value="3">
+      <span class="val" id="vl-len">3</span>
+    </div>
+  </div>
+  <button id="play-btn">Play</button>
 </div>
-<canvas id="c"></canvas>
+
+<div id="game">
+  <div id="hud">
+    <button class="hud-btn" id="back-btn">← Menu</button>
+    <div id="counter">Remaining: <span id="left-count">0</span></div>
+    <button class="hud-btn" id="new-btn">New level</button>
+  </div>
+  <canvas id="c"></canvas>
+</div>
+
+<div id="gen-overlay">Generating…</div>
 
 <script>
-// ─── Config ──────────────────────────────────────────────────────────────────
-const ROWS = 14, COLS = 9;
+'use strict';
 
-// ─── Level generator: onion rings ────────────────────────────────────────────
-// Outer ring arrows point outward → immediately removable.
-// Each inner ring unlocks after the ring around it is cleared.
-function makeLevel(rows, cols) {
-  const g = Array.from({length: rows}, () => Array(cols).fill(null));
-  const rings = Math.floor(Math.min(rows, cols) / 2);
+// ─── Presets ──────────────────────────────────────────────────────────────────
+const PRESETS = [
+  {label:'Tiny',   info:'6×8  ·  easy',     cols:6,  rows:8,  maxLen:2},
+  {label:'Small',  info:'9×14  ·  easy',    cols:9,  rows:14, maxLen:3},
+  {label:'Medium', info:'12×18  ·  medium', cols:12, rows:18, maxLen:4},
+  {label:'Large',  info:'16×24  ·  hard',   cols:16, rows:24, maxLen:5},
+];
 
-  for (let k = 0; k < rings; k++) {
-    const t = k, b = rows - 1 - k, l = k, r = cols - 1 - k;
+const pgEl = document.getElementById('preset-grid');
+PRESETS.forEach((p, i) => {
+  const b = document.createElement('button');
+  b.className = 'preset-btn' + (i === 1 ? ' active' : '');
+  b.innerHTML = `<div class="name">${p.label}</div><div class="info">${p.info}</div>`;
+  b.onclick = () => {
+    document.querySelectorAll('.preset-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    setSlidersFrom(p);
+  };
+  pgEl.appendChild(b);
+});
 
-    // Top & bottom edges
-    for (let c = l; c <= r; c++) { g[t][c] = 'U';  g[b][c] = 'D'; }
-
-    if (l === r) {
-      // Single-column remainder: split vertically
-      for (let row = t + 1; row <= Math.floor((t + b) / 2); row++) g[row][l] = 'U';
-      for (let row = Math.floor((t + b) / 2) + 1; row < b;   row++) g[row][l] = 'D';
-    } else {
-      // Left & right edges
-      for (let row = t + 1; row < b; row++) { g[row][l] = 'L';  g[row][r] = 'R'; }
-    }
-  }
-
-  // Odd-row center strip (when rows is odd and cols is even)
-  if (rows % 2 === 1) {
-    const cr = rows >> 1;
-    for (let c = 0; c < cols; c++)
-      if (!g[cr][c]) g[cr][c] = c < (cols >> 1) ? 'L' : 'R';
-  }
-
-  return g;
+function setSlidersFrom(p) {
+  document.getElementById('sl-cols').value = p.cols;
+  document.getElementById('sl-rows').value = p.rows;
+  document.getElementById('sl-len').value  = p.maxLen;
+  syncSliderLabels();
 }
 
-// ─── State ───────────────────────────────────────────────────────────────────
-let dirs    = makeLevel(ROWS, COLS);
-let removed = Array.from({length: ROWS}, () => Array(COLS).fill(false));
-let won     = false;
-
-// Animation
-let anim    = null;   // { path:[[r,c],...], dir:'U'|'D'|'L'|'R', progress:0..1 }
-let flash   = null;   // { r, c, until: timestamp }
-let lastTs  = null;
-const ANIM_MS = 420;
-
-// ─── Canvas setup ─────────────────────────────────────────────────────────────
-const canvas = document.getElementById('c');
-const ctx    = canvas.getContext('2d');
-const hudLeft = document.getElementById('left');
-
-function resize() {
-  const pad  = 12;
-  const hudH = document.getElementById('hud').offsetHeight + 10;
-  const avW  = window.innerWidth  - pad * 2;
-  const avH  = window.innerHeight - pad * 2 - hudLeft.offsetHeight - 20;
-  const aspect = COLS / ROWS;
-  let w = Math.min(avW, avH * aspect);
-  let h = w / aspect;
-  if (h > avH) { h = avH; w = h * aspect; }
-  canvas.width  = Math.floor(w);
-  canvas.height = Math.floor(h);
-}
-window.addEventListener('resize', () => { resize(); });
-resize();
-
-// ─── Game logic ───────────────────────────────────────────────────────────────
-const DR = { U:-1, D:1, L:0,  R:0  };
-const DC = { U:0,  D:0, L:-1, R:1  };
-
-function pathAhead(r, c) {
-  const d = dirs[r][c];
-  const path = [];
-  let nr = r + DR[d], nc = c + DC[d];
-  while (nr >= 0 && nr < ROWS && nc >= 0 && nc < COLS) {
-    path.push([nr, nc]);
-    nr += DR[d]; nc += DC[d];
-  }
-  return path;
+function syncSliderLabels() {
+  [['sl-cols','vl-cols'],['sl-rows','vl-rows'],['sl-len','vl-len']].forEach(([s,v]) => {
+    document.getElementById(v).textContent = document.getElementById(s).value;
+  });
 }
 
-function canRemove(r, c) {
-  if (!dirs[r][c] || removed[r][c]) return false;
-  return pathAhead(r, c).every(([nr, nc]) => !dirs[nr][nc] || removed[nr][nc]);
-}
+['sl-cols','sl-rows','sl-len'].forEach(id => {
+  document.getElementById(id).addEventListener('input', () => {
+    document.querySelectorAll('.preset-btn').forEach(x => x.classList.remove('active'));
+    syncSliderLabels();
+  });
+});
 
-function countLeft() {
-  let n = 0;
-  for (let r = 0; r < ROWS; r++)
-    for (let c = 0; c < COLS; c++)
-      if (dirs[r][c] && !removed[r][c]) n++;
-  return n;
-}
+// ─── Nav ──────────────────────────────────────────────────────────────────────
+let currentCfg = {cols:9, rows:14, maxLen:3};
 
-function checkWon() {
-  return countLeft() === 0;
-}
-
-// ─── Colours ──────────────────────────────────────────────────────────────────
-const C = {
-  bg:      '#0d0d1a',
-  cell:    '#16162e',
-  cellAlt: '#191932',
-  arrow:   '#9898cc',
-  dot:     '#22223a',
-  invalid: '#cc3333',
-  slither: '#3a6fff',
-  win:     '#44ffaa',
-  winSub:  '#7070aa',
+document.getElementById('play-btn').onclick = () => {
+  currentCfg = {
+    cols:   +document.getElementById('sl-cols').value,
+    rows:   +document.getElementById('sl-rows').value,
+    maxLen: +document.getElementById('sl-len').value,
+  };
+  launchGame();
+};
+document.getElementById('new-btn').onclick  = () => launchGame();
+document.getElementById('back-btn').onclick = () => {
+  document.getElementById('game').style.display = 'none';
+  document.getElementById('menu').style.display = 'flex';
 };
 
-// ─── Render ───────────────────────────────────────────────────────────────────
-function draw() {
-  const W = canvas.width, H = canvas.height;
-  const cw = W / COLS, ch = H / ROWS;
-  const now = Date.now();
-
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, W, H);
-
-  const gap = 2;
-
-  // Cells
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      ctx.fillStyle = (r + c) % 2 === 0 ? C.cell : C.cellAlt;
-      ctx.fillRect(c * cw + gap, r * ch + gap, cw - gap, ch - gap);
-    }
-  }
-
-  const sw = Math.min(cw, ch) * 0.095;
-
-  // Arrows & dots
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS; c++) {
-      if (!dirs[r][c]) continue;
-      const cx = c * cw + cw / 2;
-      const cy = r * ch + ch / 2;
-      const isSlitherOrigin = anim && anim.path[0][0] === r && anim.path[0][1] === c;
-
-      if (removed[r][c] && !isSlitherOrigin) {
-        ctx.fillStyle = C.dot;
-        ctx.beginPath();
-        ctx.arc(cx, cy, Math.min(cw, ch) * 0.085, 0, Math.PI * 2);
-        ctx.fill();
-      } else if (!removed[r][c]) {
-        const isInvalid = flash && flash.r === r && flash.c === c && now < flash.until;
-        drawArrow(cx, cy, dirs[r][c], cw, ch, sw, isInvalid ? C.invalid : C.arrow);
-      }
-    }
-  }
-
-  // Slither animation
-  if (anim) {
-    const { path, dir, progress } = anim;
-    const n = path.length;
-    const cp = progress * n;
-    const hi = Math.min(Math.floor(cp), n - 1);
-    const frac = cp - hi;
-
-    // Fading trail
-    for (let i = 0; i <= hi; i++) {
-      const [pr, pc] = path[i];
-      const alpha = (1 - i / n) * 0.65;
-      ctx.fillStyle = `rgba(58,111,255,${alpha.toFixed(2)})`;
-      ctx.fillRect(pc * cw + gap, pr * ch + gap, cw - gap, ch - gap);
-    }
-
-    // Moving arrowhead
-    const [hr, hc] = path[hi];
-    let hx = hc * cw + cw / 2, hy = hr * ch + ch / 2;
-    if (hi + 1 < n) {
-      const [nr, nc] = path[hi + 1];
-      hx += (nc * cw + cw / 2 - hx) * frac;
-      hy += (nr * ch + ch / 2 - hy) * frac;
-    }
-    drawArrow(hx, hy, dir, cw, ch, sw, C.slither);
-  }
-
-  // Win overlay
-  if (won) {
-    ctx.fillStyle = 'rgba(13,13,26,0.90)';
-    ctx.fillRect(0, 0, W, H);
-
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-
-    ctx.fillStyle = C.win;
-    ctx.font = `bold ${Math.round(W * 0.10)}px sans-serif`;
-    ctx.fillText('All Cleared!', W / 2, H * 0.44);
-
-    ctx.fillStyle = C.winSub;
-    ctx.font = `${Math.round(W * 0.042)}px sans-serif`;
-    ctx.fillText('Tap to play again', W / 2, H * 0.54);
-  }
-
-  hudLeft.textContent = countLeft();
+function launchGame() {
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('game').style.display = 'flex';
+  document.getElementById('gen-overlay').style.display = 'flex';
+  setTimeout(() => {
+    initGame(currentCfg.rows, currentCfg.cols, currentCfg.maxLen);
+    document.getElementById('gen-overlay').style.display = 'none';
+  }, 40);
 }
 
-function drawArrow(cx, cy, dir, cw, ch, sw, color) {
-  const sz   = Math.min(cw, ch);
-  const len  = sz * 0.50;
-  const head = sz * 0.19;
-  const spread = 0.62;
-  const angle = { R: 0, D: Math.PI / 2, L: Math.PI, U: -Math.PI / 2 }[dir];
+// ─── Level generation ─────────────────────────────────────────────────────────
+const DIRS4 = ['U','D','L','R'];
+const DR    = {U:-1,D:1,L:0,R:0};
+const DC    = {U:0,D:0,L:-1,R:1};
+
+function rnd(n){ return Math.floor(Math.random()*n); }
+function shuffle(a){
+  for(let i=a.length-1;i>0;i--){const j=rnd(i+1);[a[i],a[j]]=[a[j],a[i]];}
+  return a;
+}
+
+// Partition grid into winding snakes
+function buildSnakes(rows, cols, maxLen) {
+  const owner  = Array.from({length:rows}, () => new Int32Array(cols).fill(-1));
+  const snakes = [];
+
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      if (owner[r][c] !== -1) continue;
+      const id    = snakes.length;
+      const cells = [[r,c]];
+      owner[r][c] = id;
+      while (cells.length < maxLen) {
+        const [lr,lc] = cells[cells.length-1];
+        let ext = false;
+        for (const [dr,dc] of shuffle([[-1,0],[1,0],[0,-1],[0,1]])) {
+          const nr=lr+dr, nc=lc+dc;
+          if (nr>=0&&nr<rows&&nc>=0&&nc<cols&&owner[nr][nc]===-1) {
+            cells.push([nr,nc]); owner[nr][nc]=id; ext=true; break;
+          }
+        }
+        if (!ext) break;
+      }
+      snakes.push({cells, exitDir:'R', removed:false});
+    }
+  }
+  return {snakes, owner};
+}
+
+// Kahn's topological sort — returns true if no cycles
+function isSolvable(snakes, owner, rows, cols) {
+  const n     = snakes.length;
+  const inDeg = new Int32Array(n);
+  const succ  = Array.from({length:n}, () => []);
+
+  for (let i = 0; i < n; i++) {
+    const s    = snakes[i];
+    const head = s.cells[s.cells.length-1];
+    let   r    = head[0]+DR[s.exitDir], c = head[1]+DC[s.exitDir];
+    const seen = new Set();
+    while (r>=0&&r<rows&&c>=0&&c<cols) {
+      const o = owner[r][c];
+      if (o!==-1 && o!==i && !seen.has(o)) {
+        seen.add(o); inDeg[i]++; succ[o].push(i);
+      }
+      r+=DR[s.exitDir]; c+=DC[s.exitDir];
+    }
+  }
+
+  const q = [];
+  for (let i=0;i<n;i++) if(inDeg[i]===0) q.push(i);
+  let done = 0;
+  while (q.length) {
+    const node = q.shift(); done++;
+    for (const s of succ[node]) if(--inDeg[s]===0) q.push(s);
+  }
+  return done === n;
+}
+
+function generateLevel(rows, cols, maxLen) {
+  // Cap at 5% of grid area
+  const cap    = Math.max(1, Math.floor(rows*cols*0.05));
+  const effLen = Math.min(maxLen, cap);
+
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const {snakes, owner} = buildSnakes(rows, cols, effLen);
+    for (let trial = 0; trial < 80; trial++) {
+      for (const s of snakes) { s.exitDir = DIRS4[rnd(4)]; s.removed = false; }
+      if (isSolvable(snakes, owner, rows, cols)) return {snakes, owner};
+    }
+  }
+
+  // Fallback: each arrow points toward nearest edge (always solvable)
+  const {snakes, owner} = buildSnakes(rows, cols, effLen);
+  for (const s of snakes) {
+    const [r,c] = s.cells[s.cells.length-1];
+    const dists = [r, rows-1-r, c, cols-1-c];
+    const dirs  = ['U','D','L','R'];
+    s.exitDir   = dirs[dists.indexOf(Math.min(...dists))];
+    s.removed   = false;
+  }
+  return {snakes, owner};
+}
+
+// ─── Game state ───────────────────────────────────────────────────────────────
+let ROWS, COLS, arrows, cellOwner;
+let animState = null;   // {id, progress, distCells}
+let flashState = null;  // {id, until}
+let won = false;
+let rafId = null;
+let lastTs = null;
+const ANIM_MS = 420;
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+function initGame(rows, cols, maxLen) {
+  if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+  ROWS = rows; COLS = cols;
+  won = false; animState = null; flashState = null; lastTs = null;
+
+  const {snakes, owner} = generateLevel(rows, cols, maxLen);
+  arrows    = snakes;
+  cellOwner = owner;
+
+  resizeCanvas();
+  updateCounter();
+  rafId = requestAnimationFrame(loop);
+}
+
+function resizeCanvas() {
+  const hudH  = document.getElementById('hud').getBoundingClientRect().height;
+  const pad   = 8;
+  const availW = window.innerWidth  - pad*2;
+  const availH = window.innerHeight - hudH - pad*2 - 14;
+  const aspect = COLS / ROWS;
+  let w = Math.min(availW, availH*aspect);
+  let h = w / aspect;
+  if (h > availH) { h = availH; w = h*aspect; }
+  canvas.width  = Math.round(w);
+  canvas.height = Math.round(h);
+}
+window.addEventListener('resize', () => { if (ROWS) { resizeCanvas(); } });
+
+function updateCounter() {
+  document.getElementById('left-count').textContent =
+    arrows.filter(a => !a.removed).length;
+}
+
+// ─── Logic ────────────────────────────────────────────────────────────────────
+function canRemove(id) {
+  const a = arrows[id];
+  if (a.removed) return false;
+  const head = a.cells[a.cells.length-1];
+  let r = head[0]+DR[a.exitDir], c = head[1]+DC[a.exitDir];
+  while (r>=0&&r<ROWS&&c>=0&&c<COLS) {
+    const o = cellOwner[r][c];
+    if (o!==-1 && o!==id && !arrows[o].removed) return false;
+    r+=DR[a.exitDir]; c+=DC[a.exitDir];
+  }
+  return true;
+}
+
+function slideDistance(id) {
+  const a  = arrows[id];
+  const rs = a.cells.map(([r])=>r);
+  const cs = a.cells.map(([,c])=>c);
+  switch(a.exitDir) {
+    case 'R': return COLS - Math.min(...cs) + 1;
+    case 'L': return Math.max(...cs) + 2;
+    case 'D': return ROWS - Math.min(...rs) + 1;
+    case 'U': return Math.max(...rs) + 2;
+  }
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function cellCX(c, cw) { return c*cw + cw/2; }
+function cellCY(r, ch) { return r*ch + ch/2; }
+
+function drawSnake(a, cw, ch, color, ox, oy, alpha) {
+  const cells = a.cells;
+  const sz    = Math.min(cw, ch);
+  const sw    = sz * 0.46;
 
   ctx.save();
-  ctx.translate(cx, cy);
-  ctx.rotate(angle);
+  ctx.globalAlpha = alpha ?? 1;
+  ctx.translate(ox ?? 0, oy ?? 0);
   ctx.strokeStyle = color;
-  ctx.lineWidth = sw;
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
+  ctx.fillStyle   = color;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+  ctx.lineWidth   = sw;
 
-  // Shaft
-  ctx.beginPath(); ctx.moveTo(-len / 2, 0); ctx.lineTo(len / 2, 0); ctx.stroke();
-  // Head upper
-  ctx.beginPath(); ctx.moveTo(len / 2, 0); ctx.lineTo(len / 2 - head, -head * spread); ctx.stroke();
-  // Head lower
-  ctx.beginPath(); ctx.moveTo(len / 2, 0); ctx.lineTo(len / 2 - head, head * spread); ctx.stroke();
+  if (cells.length === 1) {
+    const cx = cellCX(cells[0][1], cw), cy = cellCY(cells[0][0], ch);
+    ctx.beginPath(); ctx.arc(cx, cy, sw/2, 0, Math.PI*2); ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(cellCX(cells[0][1],cw), cellCY(cells[0][0],ch));
+    for (let i=1;i<cells.length;i++)
+      ctx.lineTo(cellCX(cells[i][1],cw), cellCY(cells[i][0],ch));
+    ctx.stroke();
+  }
+
+  // Arrowhead at head
+  const [hr,hc] = cells[cells.length-1];
+  const hx = cellCX(hc, cw), hy = cellCY(hr, ch);
+  const tipR  = sz * 0.34;
+  const armL  = sz * 0.24;
+  const angle = {R:0,D:Math.PI/2,L:Math.PI,U:-Math.PI/2}[a.exitDir];
+
+  ctx.lineWidth = sw * 0.52;
+  ctx.save();
+  ctx.translate(hx, hy);
+  ctx.rotate(angle);
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL, -armL*0.65); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL,  armL*0.65); ctx.stroke();
+  ctx.restore();
 
   ctx.restore();
 }
 
-// ─── Animation loop ───────────────────────────────────────────────────────────
-function loop(ts) {
-  requestAnimationFrame(loop);
-  if (anim) {
-    if (!lastTs) lastTs = ts;
-    anim.progress = Math.min(1, anim.progress + (ts - lastTs) / ANIM_MS);
-    lastTs = ts;
-    if (anim.progress >= 1) {
-      anim = null;
-      lastTs = null;
-      if (checkWon()) won = true;
+function drawDot(r, c, cw, ch) {
+  ctx.fillStyle = '#1e1e3c';
+  ctx.beginPath();
+  ctx.arc(cellCX(c,cw), cellCY(r,ch), Math.min(cw,ch)*0.085, 0, Math.PI*2);
+  ctx.fill();
+}
+
+function draw() {
+  const W = canvas.width, H = canvas.height;
+  const cw = W/COLS, ch = H/ROWS;
+  const now = Date.now();
+
+  ctx.fillStyle = '#0d0d1a';
+  ctx.fillRect(0, 0, W, H);
+
+  // Cell backgrounds
+  const gap = Math.max(1.5, Math.min(cw,ch)*0.045);
+  for (let r=0;r<ROWS;r++) {
+    for (let c=0;c<COLS;c++) {
+      ctx.fillStyle = (r+c)%2===0 ? '#141430' : '#161636';
+      ctx.fillRect(c*cw+gap, r*ch+gap, cw-gap*2, ch-gap*2);
     }
   }
+
+  const animId  = animState?.id ?? -1;
+  const flashNow = flashState && now < flashState.until;
+
+  // Draw each arrow
+  for (let i=0;i<arrows.length;i++) {
+    const a = arrows[i];
+    if (i === animId) continue;   // drawn separately below
+
+    if (a.removed) {
+      for (const [r,c] of a.cells) drawDot(r, c, cw, ch);
+    } else {
+      const color = (flashNow && flashState.id===i) ? '#cc3344' : '#8888cc';
+      drawSnake(a, cw, ch, color);
+    }
+  }
+
+  // Sliding animation
+  if (animState) {
+    const a   = arrows[animId];
+    const d   = a.exitDir;
+    const ox  = DC[d] * animState.distCells * cw * animState.progress;
+    const oy  = DR[d] * animState.distCells * ch * animState.progress;
+    const alp = Math.max(0, 1 - animState.progress * 0.6);
+    drawSnake(a, cw, ch, '#3b60ff', ox, oy, alp);
+  }
+
+  // Win
+  if (won) {
+    ctx.fillStyle = 'rgba(13,13,26,.88)';
+    ctx.fillRect(0,0,W,H);
+    const sz = Math.min(W,H);
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillStyle='#44ffaa';
+    ctx.font=`bold ${Math.round(sz*.09)}px system-ui`;
+    ctx.fillText('All Cleared!', W/2, H*.43);
+    ctx.fillStyle='#555580';
+    ctx.font=`${Math.round(sz*.038)}px system-ui`;
+    ctx.fillText('Tap for a new level', W/2, H*.54);
+  }
+}
+
+// ─── Loop ─────────────────────────────────────────────────────────────────────
+function loop(ts) {
+  rafId = requestAnimationFrame(loop);
+
+  if (animState) {
+    if (!lastTs) lastTs = ts;
+    animState.progress = Math.min(1, animState.progress + (ts-lastTs)/ANIM_MS);
+    lastTs = ts;
+    if (animState.progress >= 1) {
+      animState = null; lastTs = null;
+      won = arrows.every(a => a.removed);
+      updateCounter();
+    }
+  } else {
+    lastTs = null;
+  }
+
+  if (flashState && Date.now() > flashState.until) flashState = null;
+
   draw();
 }
-requestAnimationFrame(loop);
 
 // ─── Input ────────────────────────────────────────────────────────────────────
 function tap(px, py) {
-  if (anim) return;
+  if (animState) return;
 
-  if (won) {
-    dirs    = makeLevel(ROWS, COLS);
-    removed = Array.from({length: ROWS}, () => Array(COLS).fill(false));
-    won     = false;
+  if (won) { launchGame(); return; }
+
+  const cw = canvas.width/COLS, ch = canvas.height/ROWS;
+  const c  = Math.floor(px/cw), r = Math.floor(py/ch);
+  if (r<0||r>=ROWS||c<0||c>=COLS) return;
+
+  const id = cellOwner[r][c];
+  if (id===-1) return;
+  const a = arrows[id];
+  if (a.removed) return;
+
+  if (!canRemove(id)) {
+    flashState = {id, until: Date.now()+380};
     return;
   }
 
-  const cw = canvas.width / COLS, ch = canvas.height / ROWS;
-  const c  = Math.floor(px / cw);
-  const r  = Math.floor(py / ch);
-  if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return;
-  if (!dirs[r][c] || removed[r][c]) return;
-
-  if (!canRemove(r, c)) {
-    flash = { r, c, until: Date.now() + 380 };
-    return;
-  }
-
-  const path = [[r, c], ...pathAhead(r, c)];
-  const dir  = dirs[r][c];
-  removed[r][c] = true;
-  anim = { path, dir, progress: 0 };
-  lastTs = null;
+  flashState = null;
+  a.removed  = true;
+  animState  = {id, progress:0, distCells: slideDistance(id)};
+  lastTs     = null;
+  updateCounter();
 }
 
-function canvasCoords(clientX, clientY) {
-  const rect = canvas.getBoundingClientRect();
-  return [
-    (clientX - rect.left)  * canvas.width  / rect.width,
-    (clientY - rect.top)   * canvas.height / rect.height,
-  ];
+function toCanvasCoords(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return [(clientX-r.left)*canvas.width/r.width,
+          (clientY-r.top)*canvas.height/r.height];
 }
-
-canvas.addEventListener('click', e => {
-  tap(...canvasCoords(e.clientX, e.clientY));
-});
-
+canvas.addEventListener('click',    e => tap(...toCanvasCoords(e.clientX, e.clientY)));
 canvas.addEventListener('touchend', e => {
   e.preventDefault();
-  const t = e.changedTouches[0];
-  tap(...canvasCoords(t.clientX, t.clientY));
-}, { passive: false });
+  tap(...toCanvasCoords(e.changedTouches[0].clientX, e.changedTouches[0].clientY));
+}, {passive:false});
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+setSlidersFrom(PRESETS[1]);
 </script>
 </body>
 </html>
