@@ -363,7 +363,7 @@ function cellCY(r, ch) { return r*ch + ch/2; }
 function drawSnake(a, cw, ch, color, ox, oy, alpha) {
   const cells = a.cells;
   const sz    = Math.min(cw, ch);
-  const sw    = sz * 0.30;
+  const sw    = sz * 0.20;
 
   ctx.save();
   ctx.globalAlpha = alpha ?? 1;
@@ -388,8 +388,8 @@ function drawSnake(a, cw, ch, color, ox, oy, alpha) {
   // Arrowhead at head — small V pointing in exitDir
   const [hr,hc] = cells[cells.length-1];
   const hx = cellCX(hc, cw), hy = cellCY(hr, ch);
-  const tipR  = sz * 0.18;
-  const armL  = sz * 0.14;
+  const tipR  = sz * 0.30;
+  const armL  = sz * 0.22;
   const angle = {R:0,D:Math.PI/2,L:Math.PI,U:-Math.PI/2}[a.exitDir];
 
   ctx.lineWidth = sw * 0.48;
@@ -404,9 +404,9 @@ function drawSnake(a, cw, ch, color, ox, oy, alpha) {
 }
 
 function drawDot(r, c, cw, ch) {
-  ctx.fillStyle = '#1e1e3c';
+  ctx.fillStyle = '#33335a';
   ctx.beginPath();
-  ctx.arc(cellCX(c,cw), cellCY(r,ch), Math.min(cw,ch)*0.085, 0, Math.PI*2);
+  ctx.arc(cellCX(c,cw), cellCY(r,ch), Math.min(cw,ch)*0.07, 0, Math.PI*2);
   ctx.fill();
 }
 
@@ -461,7 +461,7 @@ function drawSnakeAnim(a, cw, ch, progress, distCells) {
 
   // Arrowhead at head's current position
   const [hpx,hpy] = cellPx(n-1);
-  const tipR = sz*0.18, armL = sz*0.14;
+  const tipR = sz*0.30, armL = sz*0.22;
   const angle = {R:0,D:Math.PI/2,L:Math.PI,U:-Math.PI/2}[d];
   ctx.lineWidth = sw*0.48;
   ctx.save();
@@ -479,15 +479,6 @@ function draw() {
 
   ctx.fillStyle = '#0d0d1a';
   ctx.fillRect(0, 0, W, H);
-
-  // Cell backgrounds
-  const gap = Math.max(2, Math.min(cw,ch)*0.07);
-  for (let r=0;r<ROWS;r++) {
-    for (let c=0;c<COLS;c++) {
-      ctx.fillStyle = (r+c)%2===0 ? '#141430' : '#161636';
-      ctx.fillRect(c*cw+gap, r*ch+gap, cw-gap*2, ch-gap*2);
-    }
-  }
 
   const animId  = animState?.id ?? -1;
   const flashNow = flashState && now < flashState.until;
