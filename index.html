@@ -236,6 +236,19 @@ function isSolvable(snakes, owner, rows, cols) {
   return done === n;
 }
 
+const REV = {U:'D',D:'U',L:'R',R:'L'};
+
+// Returns exit dirs that don't point back into the snake body
+function safeExitDirs(snake) {
+  const n = snake.cells.length;
+  if (n < 2) return DIRS4;
+  const [r0,c0] = snake.cells[n-2], [r1,c1] = snake.cells[n-1];
+  let incoming;
+  if (r1<r0) incoming='U'; else if (r1>r0) incoming='D';
+  else if (c1<c0) incoming='L'; else incoming='R';
+  return DIRS4.filter(d => d !== REV[incoming]);
+}
+
 function generateLevel(rows, cols, maxLen) {
   // Cap at 5% of grid area
   const cap    = Math.max(1, Math.floor(rows*cols*0.05));
@@ -244,7 +257,11 @@ function generateLevel(rows, cols, maxLen) {
   for (let attempt = 0; attempt < 60; attempt++) {
     const {snakes, owner} = buildSnakes(rows, cols, effLen);
     for (let trial = 0; trial < 80; trial++) {
-      for (const s of snakes) { s.exitDir = DIRS4[rnd(4)]; s.removed = false; }
+      for (const s of snakes) {
+        const valid = safeExitDirs(s);
+        s.exitDir = valid[rnd(valid.length)];
+        s.removed = false;
+      }
       if (isSolvable(snakes, owner, rows, cols)) return {snakes, owner};
     }
   }
@@ -253,10 +270,14 @@ function generateLevel(rows, cols, maxLen) {
   const {snakes, owner} = buildSnakes(rows, cols, effLen);
   for (const s of snakes) {
     const [r,c] = s.cells[s.cells.length-1];
-    const dists = [r, rows-1-r, c, cols-1-c];
-    const dirs  = ['U','D','L','R'];
-    s.exitDir   = dirs[dists.indexOf(Math.min(...dists))];
-    s.removed   = false;
+    const valid = safeExitDirs(s);
+    let best = valid[0], bestDist = Infinity;
+    for (const d of valid) {
+      const dist = {U:r,D:rows-1-r,L:c,R:cols-1-c}[d];
+      if (dist < bestDist) { bestDist=dist; best=d; }
+    }
+    s.exitDir = best;
+    s.removed = false;
   }
   return {snakes, owner};
 }
@@ -320,15 +341,18 @@ function canRemove(id) {
   return true;
 }
 
+// How many cells past the head until the TAIL fully exits the grid.
+// In the path-following animation the tail traces cells[0]→…→head→exitDir×distCells.
+// We only need head→edge distance; the tail arrives there after (n-1)+distCells total steps.
 function slideDistance(id) {
-  const a  = arrows[id];
-  const rs = a.cells.map(([r])=>r);
-  const cs = a.cells.map(([,c])=>c);
+  const a    = arrows[id];
+  const head = a.cells[a.cells.length-1];
+  const [hr,hc] = head;
   switch(a.exitDir) {
-    case 'R': return COLS - Math.min(...cs) + 1;
-    case 'L': return Math.max(...cs) + 2;
-    case 'D': return ROWS - Math.min(...rs) + 1;
-    case 'U': return Math.max(...rs) + 2;
+    case 'R': return COLS - hc + 1;
+    case 'L': return hc  + 2;
+    case 'D': return ROWS - hr + 1;
+    case 'U': return hr  + 2;
   }
 }
 
@@ -361,19 +385,19 @@ function drawSnake(a, cw, ch, color, ox, oy, alpha) {
     ctx.stroke();
   }
 
-  // Arrowhead at head
+  // Arrowhead at head — small V pointing in exitDir
   const [hr,hc] = cells[cells.length-1];
   const hx = cellCX(hc, cw), hy = cellCY(hr, ch);
-  const tipR  = sz * 0.34;
-  const armL  = sz * 0.24;
+  const tipR  = sz * 0.18;
+  const armL  = sz * 0.14;
   const angle = {R:0,D:Math.PI/2,L:Math.PI,U:-Math.PI/2}[a.exitDir];
 
-  ctx.lineWidth = sw * 0.52;
+  ctx.lineWidth = sw * 0.48;
   ctx.save();
   ctx.translate(hx, hy);
   ctx.rotate(angle);
-  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL, -armL*0.65); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL,  armL*0.65); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL, -armL*0.62); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL,  armL*0.62); ctx.stroke();
   ctx.restore();
 
   ctx.restore();
@@ -384,6 +408,68 @@ function drawDot(r, c, cw, ch) {
   ctx.beginPath();
   ctx.arc(cellCX(c,cw), cellCY(r,ch), Math.min(cw,ch)*0.085, 0, Math.PI*2);
   ctx.fill();
+}
+
+// Each cell k follows path: cells[k] → cells[k+1] → … → head → exitDir×∞
+// All cells advance at the same speed; tail is always (n-1) steps behind head.
+function drawSnakeAnim(a, cw, ch, progress, distCells) {
+  const n          = a.cells.length;
+  const d          = a.exitDir;
+  const head       = a.cells[n-1];
+  const totalSteps = (n-1) + distCells;  // steps until tail exits
+  const p          = progress * totalSteps;
+
+  // Pixel coords for cell k at current animation step p
+  function cellPx(k) {
+    const ip = Math.floor(p), frac = p - ip;
+    // path_k[idx]: position of cell k after `idx` steps
+    function pathAt(idx) {
+      const ci = k + idx;
+      if (ci < n) return a.cells[ci];
+      const steps = ci - (n-1);
+      return [head[0]+DR[d]*steps, head[1]+DC[d]*steps];
+    }
+    const from = pathAt(ip), to = pathAt(ip+1);
+    return [
+      (from[1]+(to[1]-from[1])*frac)*cw + cw/2,
+      (from[0]+(to[0]-from[0])*frac)*ch + ch/2,
+    ];
+  }
+
+  const sz  = Math.min(cw,ch);
+  const sw  = sz*0.46;
+  const alp = Math.max(0.1, 1 - progress*0.65);
+
+  ctx.save();
+  ctx.globalAlpha  = alp;
+  ctx.strokeStyle  = '#3b60ff';
+  ctx.fillStyle    = '#3b60ff';
+  ctx.lineWidth    = sw;
+  ctx.lineCap      = 'round';
+  ctx.lineJoin     = 'round';
+
+  if (n === 1) {
+    const [px,py] = cellPx(0);
+    ctx.beginPath(); ctx.arc(px,py,sw/2,0,Math.PI*2); ctx.fill();
+  } else {
+    ctx.beginPath();
+    const [px0,py0] = cellPx(0);
+    ctx.moveTo(px0,py0);
+    for (let k=1;k<n;k++) { const [px,py]=cellPx(k); ctx.lineTo(px,py); }
+    ctx.stroke();
+  }
+
+  // Arrowhead at head's current position
+  const [hpx,hpy] = cellPx(n-1);
+  const tipR = sz*0.18, armL = sz*0.14;
+  const angle = {R:0,D:Math.PI/2,L:Math.PI,U:-Math.PI/2}[d];
+  ctx.lineWidth = sw*0.48;
+  ctx.save();
+  ctx.translate(hpx,hpy); ctx.rotate(angle);
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL,-armL*0.62); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL, armL*0.62); ctx.stroke();
+  ctx.restore();
+  ctx.restore();
 }
 
 function draw() {
@@ -419,14 +505,9 @@ function draw() {
     }
   }
 
-  // Sliding animation
+  // Path-following animation: each cell traces the winding snake body then exits
   if (animState) {
-    const a   = arrows[animId];
-    const d   = a.exitDir;
-    const ox  = DC[d] * animState.distCells * cw * animState.progress;
-    const oy  = DR[d] * animState.distCells * ch * animState.progress;
-    const alp = Math.max(0, 1 - animState.progress * 0.6);
-    drawSnake(a, cw, ch, '#3b60ff', ox, oy, alp);
+    drawSnakeAnim(arrows[animId], cw, ch, animState.progress, animState.distCells);
   }
 
   // Win
