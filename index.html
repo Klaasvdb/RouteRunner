@@ -219,7 +219,7 @@ function isSolvable(snakes, owner, rows, cols) {
     const seen = new Set();
     while (r>=0&&r<rows&&c>=0&&c<cols) {
       const o = owner[r][c];
-      if (o!==-1 && o!==i && !seen.has(o)) {
+      if (o!==-1 && !seen.has(o)) {
         seen.add(o); inDeg[i]++; succ[o].push(i);
       }
       r+=DR[s.exitDir]; c+=DC[s.exitDir];
@@ -335,7 +335,7 @@ function canRemove(id) {
   let r = head[0]+DR[a.exitDir], c = head[1]+DC[a.exitDir];
   while (r>=0&&r<ROWS&&c>=0&&c<COLS) {
     const o = cellOwner[r][c];
-    if (o!==-1 && o!==id && !arrows[o].removed) return false;
+    if (o!==-1 && !arrows[o].removed) return false;
     r+=DR[a.exitDir]; c+=DC[a.exitDir];
   }
   return true;
@@ -410,64 +410,71 @@ function drawDot(r, c, cw, ch) {
   ctx.fill();
 }
 
-// Each cell k follows path: cells[k] → cells[k+1] → … → head → exitDir×∞
-// All cells advance at the same speed; tail is always (n-1) steps behind head.
+// Snake path-following animation: tail traces through every waypoint of the winding body,
+// then exits in exitDir. The whole body advances together, no diagonal shortcuts at corners.
 function drawSnakeAnim(a, cw, ch, progress, distCells) {
   const n          = a.cells.length;
   const d          = a.exitDir;
   const head       = a.cells[n-1];
-  const totalSteps = (n-1) + distCells;  // steps until tail exits
+  const totalSteps = (n-1) + distCells;
   const p          = progress * totalSteps;
+  const ip         = Math.floor(p);
+  const frac       = p - ip;
 
-  // Pixel coords for cell k at current animation step p
-  function cellPx(k) {
-    const ip = Math.floor(p), frac = p - ip;
-    // path_k[idx]: position of cell k after `idx` steps
-    function pathAt(idx) {
-      const ci = k + idx;
-      if (ci < n) return a.cells[ci];
-      const steps = ci - (n-1);
-      return [head[0]+DR[d]*steps, head[1]+DC[d]*steps];
-    }
-    const from = pathAt(ip), to = pathAt(ip+1);
-    return [
-      (from[1]+(to[1]-from[1])*frac)*cw + cw/2,
-      (from[0]+(to[0]-from[0])*frac)*ch + ch/2,
-    ];
+  // Grid position at path index idx: body cells first, then exit direction
+  function pathPos(idx) {
+    if (idx < n) return a.cells[idx];
+    return [head[0] + DR[d]*(idx-n+1), head[1] + DC[d]*(idx-n+1)];
   }
 
-  const sz  = Math.min(cw,ch);
-  const sw  = sz*0.30;
-  const alp = Math.max(0.1, 1 - progress*0.65);
+  // Interpolated pixel between pathPos(idx) and pathPos(idx+1)
+  function lerpPx(idx) {
+    const [r0,c0] = pathPos(idx);
+    const [r1,c1] = pathPos(idx+1);
+    return [(c0+(c1-c0)*frac)*cw + cw/2, (r0+(r1-r0)*frac)*ch + ch/2];
+  }
+
+  const tailPx = lerpPx(ip);         // tail: fractionally between pathPos(ip) and pathPos(ip+1)
+  const headPx = lerpPx(ip + n - 1); // head: fractionally between pathPos(ip+n-1) and pathPos(ip+n)
+
+  const sz  = Math.min(cw, ch);
+  const sw  = sz * 0.20;
+  const alp = Math.max(0.1, 1 - progress * 0.65);
 
   ctx.save();
-  ctx.globalAlpha  = alp;
-  ctx.strokeStyle  = '#3b60ff';
-  ctx.fillStyle    = '#3b60ff';
-  ctx.lineWidth    = sw;
-  ctx.lineCap      = 'round';
-  ctx.lineJoin     = 'round';
+  ctx.globalAlpha = alp;
+  ctx.strokeStyle = '#3b60ff';
+  ctx.fillStyle   = '#3b60ff';
+  ctx.lineWidth   = sw;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
 
   if (n === 1) {
-    const [px,py] = cellPx(0);
-    ctx.beginPath(); ctx.arc(px,py,sw/2,0,Math.PI*2); ctx.fill();
-  } else {
     ctx.beginPath();
-    const [px0,py0] = cellPx(0);
-    ctx.moveTo(px0,py0);
-    for (let k=1;k<n;k++) { const [px,py]=cellPx(k); ctx.lineTo(px,py); }
+    ctx.arc(tailPx[0], tailPx[1], sw/2, 0, Math.PI*2);
+    ctx.fill();
+  } else {
+    // Polyline: fractional tail → integer waypoints → fractional head
+    // Each segment is axis-aligned (horizontal or vertical), never diagonal
+    ctx.beginPath();
+    ctx.moveTo(tailPx[0], tailPx[1]);
+    for (let wi = ip+1; wi <= ip+(n-1); wi++) {
+      const [wr,wc] = pathPos(wi);
+      ctx.lineTo(wc*cw + cw/2, wr*ch + ch/2);
+    }
+    ctx.lineTo(headPx[0], headPx[1]);
     ctx.stroke();
   }
 
-  // Arrowhead at head's current position
-  const [hpx,hpy] = cellPx(n-1);
-  const tipR = sz*0.30, armL = sz*0.22;
-  const angle = {R:0,D:Math.PI/2,L:Math.PI,U:-Math.PI/2}[d];
-  ctx.lineWidth = sw*0.48;
+  // Arrowhead at head
+  const tipR  = sz * 0.30, armL = sz * 0.22;
+  const angle = {R:0, D:Math.PI/2, L:Math.PI, U:-Math.PI/2}[d];
+  ctx.lineWidth = sw * 0.48;
   ctx.save();
-  ctx.translate(hpx,hpy); ctx.rotate(angle);
-  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL,-armL*0.62); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL, armL*0.62); ctx.stroke();
+  ctx.translate(headPx[0], headPx[1]);
+  ctx.rotate(angle);
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL, -armL*0.62); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(tipR,0); ctx.lineTo(tipR-armL,  armL*0.62); ctx.stroke();
   ctx.restore();
   ctx.restore();
 }
